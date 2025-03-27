@@ -26,7 +26,6 @@ const fetcher = (variables, token) => {
       query: `
       query userInfo($login: String!) {
         user(login: $login) {
-          # fetch only owner repos & not forks
           repositories(ownerAffiliations: OWNER, isFork: false, first: 100) {
             nodes {
               name
@@ -100,58 +99,57 @@ const fetchTopLanguages = async (
   let repoNodes = res.data.data.user.repositories.nodes;
   let repoToHide = {};
 
-  // populate repoToHide map for quick lookup
-  // while filtering out
+  // Exclude certain repositories
   if (exclude_repo) {
     exclude_repo.forEach((repoName) => {
       repoToHide[repoName] = true;
     });
   }
 
-  // filter out repositories to be hidden
+  // Filter out excluded repos
   repoNodes = repoNodes
     .sort((a, b) => b.size - a.size)
-    .filter((name) => !repoToHide[name.name]);
+    .filter((repo) => !repoToHide[repo.name]);
 
   let repoCount = 0;
 
+  // Aggregate and normalize language stats
   repoNodes = repoNodes
     .filter((node) => node.languages.edges.length > 0)
-    // flatten the list of language nodes
     .reduce((acc, curr) => curr.languages.edges.concat(acc), [])
     .reduce((acc, prev) => {
-      // get the size of the language (bytes)
+      // 👇 Normalize "Jupyter Notebook" to "Python"
+      const normalizedName = prev.node.name === "Jupyter Notebook" ? "Python" : prev.node.name;
+      const normalizedColor = normalizedName === "Python" ? "#3572A5" : prev.node.color;
+
       let langSize = prev.size;
 
-      // if we already have the language in the accumulator
-      // & the current language name is same as previous name
-      // add the size to the language size and increase repoCount.
-      if (acc[prev.node.name] && prev.node.name === acc[prev.node.name].name) {
-        langSize = prev.size + acc[prev.node.name].size;
+      if (acc[normalizedName]) {
+        langSize = prev.size + acc[normalizedName].size;
         repoCount += 1;
       } else {
-        // reset repoCount to 1
-        // language must exist in at least one repo to be detected
         repoCount = 1;
       }
+
       return {
         ...acc,
-        [prev.node.name]: {
-          name: prev.node.name,
-          color: prev.node.color,
+        [normalizedName]: {
+          name: normalizedName,
+          color: normalizedColor,
           size: langSize,
           count: repoCount,
         },
       };
     }, {});
 
+  // Weighting calculation
   Object.keys(repoNodes).forEach((name) => {
-    // comparison index calculation
     repoNodes[name].size =
       Math.pow(repoNodes[name].size, size_weight) *
       Math.pow(repoNodes[name].count, count_weight);
   });
 
+  // Sort and return
   const topLangs = Object.keys(repoNodes)
     .sort((a, b) => repoNodes[b].size - repoNodes[a].size)
     .reduce((result, key) => {
